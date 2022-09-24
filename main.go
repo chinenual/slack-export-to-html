@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"github.com/Jeffail/gabs/v2"
 	"io/fs"
 	"log"
@@ -20,11 +21,12 @@ var users = make(map[string]string)
 var channels = make(map[string]string)
 var inDir string
 var outDir string
-var out *os.File
+var title string
 
 func main() {
 	flag.StringVar(&inDir, "in", ".", "Unzipped location of the Slack export")
 	flag.StringVar(&outDir, "out", ".", "Directory where to write output files")
+	flag.StringVar(&title, "title", "", "Title")
 
 	flag.Parse()
 
@@ -37,11 +39,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if out, err = os.Create(path.Join(outDir, "index.html")); err != nil {
-		log.Fatal(err)
-	}
-
-	if err = emitCss(); err != nil {
+	if err = processIndex(); err != nil {
 		log.Fatal(err)
 	}
 
@@ -122,7 +120,7 @@ func getChannels() (err error) {
 	return
 }
 
-func emitCss() (err error) {
+func emitCss(out *os.File) (err error) {
 	out.WriteString(`
 <style>
 body {
@@ -140,6 +138,9 @@ body {
 }
 .user {
 	font-weight: bold;
+}
+img {
+	max-width: 80%;
 }
 .ts {
 	font-style: italic;
@@ -171,7 +172,7 @@ func formatUsername(userId string) (name string) {
 	return
 }
 
-func processChannelMessage(msg *gabs.Container) (err error) {
+func processChannelMessage(out *os.File, msg *gabs.Container) (err error) {
 	userId := msg.Search("user").Data().(string)
 	ts := msg.Search("ts").Data().(string)
 
@@ -268,13 +269,44 @@ func processChannelMessage(msg *gabs.Container) (err error) {
 			}
 		}
 	}
+	attachments := msg.Search("attachments")
+	if attachments != nil {
+		for _, ele := range attachments.Children() {
+			fmt.Printf("attachment: %s\n", ele.String())
+			out.WriteString("<a href='")
+			out.WriteString(ele.Search("from_url").Data().(string))
+			out.WriteString("'><img src='")
+			if ele.Search("image_url") != nil {
+				out.WriteString(ele.Search("image_url").Data().(string))
+			} else if ele.Search("thumb_url") != nil {
+				out.WriteString(ele.Search("thumb_url").Data().(string))
+			}
+			out.WriteString("'></img></a>")
+		}
+	}
+	files := msg.Search("files")
+	if files != nil {
+		for _, ele := range files.Children() {
+			if ele.Search("filetype") != nil {
+				filetype := ele.Search("filetype").Data().(string)
+				switch filetype {
+				case "jpg", "png", "mov", "gif":
+					out.WriteString("<img src='")
+					out.WriteString(ele.Search("url_private").Data().(string))
+					out.WriteString("'></img>")
+				default:
+					log.Println("DONT KNOW WHAT TO DO files: " + ele.String())
+				}
+			}
+		}
+	}
 	out.WriteString("</div>\n")
 	out.WriteString("</div>\n")
 
 	return
 }
 
-func processChannelMessageFile(pathname string) (err error) {
+func processChannelMessageFile(out *os.File, pathname string) (err error) {
 	var body []byte
 	if body, err = os.ReadFile(pathname); err != nil {
 		return
@@ -286,7 +318,7 @@ func processChannelMessageFile(pathname string) (err error) {
 
 	list := jsonParsed.Children()
 	for _, msg := range list {
-		if err = processChannelMessage(msg); err != nil {
+		if err = processChannelMessage(out, msg); err != nil {
 			return
 		}
 	}
@@ -294,6 +326,12 @@ func processChannelMessageFile(pathname string) (err error) {
 }
 
 func processChannel(name string) (err error) {
+	var out *os.File
+	if out, err = os.Create(path.Join(outDir, name+".html")); err != nil {
+		log.Fatal(err)
+	}
+	emitHeader(out, name)
+
 	p := path.Join(inDir, name)
 	var files []fs.DirEntry
 	if files, err = os.ReadDir(p); err != nil {
@@ -303,10 +341,11 @@ func processChannel(name string) (err error) {
 	for _, file := range files {
 		fn := path.Join(p, file.Name())
 		log.Printf("%s ...\n", fn)
-		if err = processChannelMessageFile(fn); err != nil {
+		if err = processChannelMessageFile(out, fn); err != nil {
 			return
 		}
 	}
+	emitFooter(out)
 	return
 }
 
@@ -322,5 +361,59 @@ func processChannels() (err error) {
 			return
 		}
 	}
+	return
+}
+
+func makeTitle(channelName string) (result string) {
+	result = title
+	if channelName != "" {
+		result = result + " -- #" + channelName
+	}
+	return
+}
+
+func emitHeader(out *os.File, channelName string) (err error) {
+	out.WriteString("<html><head>\n")
+	if emitCss(out); err != nil {
+		return
+	}
+	out.WriteString("<title>")
+	out.WriteString(makeTitle(channelName))
+	out.WriteString("</title>")
+	out.WriteString("<body>\n")
+	out.WriteString("<h1>")
+	out.WriteString(makeTitle(channelName))
+	out.WriteString("</h1>")
+	return
+}
+func emitFooter(out *os.File) (err error) {
+	out.WriteString("</body></html>\n")
+	return
+}
+
+func processIndex() (err error) {
+	var out *os.File
+	if out, err = os.Create(path.Join(outDir, "index.html")); err != nil {
+		log.Fatal(err)
+	}
+
+	if err = emitHeader(out, ""); err != nil {
+		return
+	}
+
+	// sort by name
+	var names []string
+	for _, name := range channels {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		out.WriteString("<a href='" + name + ".html'>#" + name + "</a><br>\n")
+	}
+
+	if err = emitFooter(out); err != nil {
+		return
+	}
+
 	return
 }
