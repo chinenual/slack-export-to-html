@@ -243,25 +243,31 @@ func processChannelMessage(out *os.File, msg *gabs.Container) (err error) {
 							eleType := ele.Search("type").Data().(string)
 							switch eleType {
 							case "channel": // ignore
-								out.WriteString("<div class='msgText'>")
+								out.WriteString("<span class='msgText'>")
 								out.WriteString("#")
 								channelId := ele.Search("channel_id").Data().(string)
 								out.WriteString(channels[channelId])
-								out.WriteString("</div>\n")
+								out.WriteString("</span>\n")
 							case "text":
-								out.WriteString("<div class='msgText'>")
+								out.WriteString("<span class='msgText'>")
 								txt := ele.Search("text").Data().(string)
 								txt = strings.ReplaceAll(txt, "\n", "<br/>\n")
 								out.WriteString(txt)
-								out.WriteString("</div>\n")
+								out.WriteString("</span>\n")
 							case "link":
-								out.WriteString("<div class='msgLink'>")
+								out.WriteString("<span class='msgLink'>")
 								out.WriteString("<a href='")
 								out.WriteString(ele.Search("url").Data().(string))
 								out.WriteString("'>")
 								out.WriteString(ele.Search("url").Data().(string))
 								out.WriteString("</a>")
-								out.WriteString("</div>\n")
+								out.WriteString("</span>\n")
+							case "emoji":
+								out.WriteString("<span class='msgText'>")
+								out.WriteString("&#x" + ele.Search("unicode").Data().(string))
+								out.WriteString("</span>\n")
+							default:
+								log.Println("DONT KNOW WHAT TO DO: block.elements " + eleType)
 							}
 						}
 					}
