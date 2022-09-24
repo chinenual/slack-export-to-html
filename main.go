@@ -215,9 +215,15 @@ func processChannelMessage(msg *gabs.Container) (err error) {
 			out.WriteString(formatUsername(userId))
 			out.WriteString(" has joined the channel")
 			out.WriteString("</div>")
+		} else if eleType == "message" && eleSubtype == "channel_purpose" {
+			out.WriteString("<div class='msgText'>")
+			out.WriteString(msg.Search("text").Data().(string))
+			out.WriteString("</div>")
 		} else {
-			log.Println("DONT KNOW WHAT TO DO: " + eleType + " " + eleSubtype)
-			out.WriteString("DONT KNOW WHAT TO DO: " + eleType + " " + eleSubtype)
+			//log.Println("DONT KNOW WHAT TO DO: " + eleType + " " + eleSubtype)
+			out.WriteString("<div class='msgText'>")
+			out.WriteString(msg.Search("text").Data().(string))
+			out.WriteString("</div>")
 		}
 	} else {
 		for _, blockele := range blocks.Children() {
@@ -236,8 +242,11 @@ func processChannelMessage(msg *gabs.Container) (err error) {
 							eleType := ele.Search("type").Data().(string)
 							switch eleType {
 							case "channel": // ignore
-								log.Println("block DONT KNOW WHAT TO DO: channel\n")
-								out.WriteString("block DONT KNOW WHAT TO DO: channel\n")
+								out.WriteString("<div class='msgText'>")
+								out.WriteString("#")
+								channelId := ele.Search("channel_id").Data().(string)
+								out.WriteString(channels[channelId])
+								out.WriteString("</div>\n")
 							case "text":
 								out.WriteString("<div class='msgText'>")
 								txt := ele.Search("text").Data().(string)
