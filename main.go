@@ -1,11 +1,14 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"github.com/Jeffail/gabs/v2"
+	"io"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"path"
 	"sort"
@@ -221,7 +224,6 @@ func processChannelMessage(out *os.File, msg *gabs.Container) (err error) {
 			out.WriteString(msg.Search("text").Data().(string))
 			out.WriteString("</div>")
 		} else {
-			//log.Println("DONT KNOW WHAT TO DO: " + eleType + " " + eleSubtype)
 			out.WriteString("<div class='msgText'>")
 			out.WriteString(msg.Search("text").Data().(string))
 			out.WriteString("</div>")
@@ -266,8 +268,10 @@ func processChannelMessage(out *os.File, msg *gabs.Container) (err error) {
 								out.WriteString("<span class='msgText'>")
 								out.WriteString("&#x" + ele.Search("unicode").Data().(string))
 								out.WriteString("</span>\n")
+							case "user", "broadcast":
+								// ignore
 							default:
-								log.Println("DONT KNOW WHAT TO DO: block.elements " + eleType)
+								log.Println("DONT KNOW WHAT TO DO: block.elements " + eleType + " " + ele.String())
 							}
 						}
 					}
@@ -281,27 +285,69 @@ func processChannelMessage(out *os.File, msg *gabs.Container) (err error) {
 			fmt.Printf("attachment: %s\n", ele.String())
 			out.WriteString("<a href='")
 			out.WriteString(ele.Search("from_url").Data().(string))
-			out.WriteString("'><img src='")
+			out.WriteString("'>")
 			if ele.Search("image_url") != nil {
+				out.WriteString("<img src='")
 				out.WriteString(ele.Search("image_url").Data().(string))
+				out.WriteString("'></img><br>")
 			} else if ele.Search("thumb_url") != nil {
+				out.WriteString("<img src='")
 				out.WriteString(ele.Search("thumb_url").Data().(string))
+				out.WriteString("'></img><br>")
 			}
-			out.WriteString("'></img></a>")
+			// In practice, this sometimes results in "duplicate" links -- some
+			// attachments have no image/thumb, so they just repeat what is already
+			// printed in the text.  Not sure how/whether to special case these to
+			// omit the redundancy
+			if ele.Search("title") != nil {
+				out.WriteString(ele.Search("title").Data().(string))
+			} else if ele.Search("fallback") != nil {
+				out.WriteString(ele.Search("fallback").Data().(string))
+			}
+			out.WriteString("</a>")
 		}
 	}
 	files := msg.Search("files")
 	if files != nil {
 		for _, ele := range files.Children() {
 			if ele.Search("filetype") != nil {
+				mimetype := ele.Search("mimetype").Data().(string)
 				filetype := ele.Search("filetype").Data().(string)
+				name := ele.Search("name").Data().(string)
+				id := ele.Search("id").Data().(string)
+				var url string
+				url, err = archiveFile(id, filetype, ele.Search("url_private").Data().(string))
 				switch filetype {
-				case "jpg", "png", "mov", "gif":
+				case "jpg", "png", "gif":
 					out.WriteString("<img src='")
-					out.WriteString(ele.Search("url_private").Data().(string))
+					out.WriteString(url)
 					out.WriteString("'></img>")
+				case "m4a", "wav", "aac":
+					out.WriteString("<audio controls>")
+					out.WriteString("<source src='")
+					out.WriteString(url)
+					out.WriteString("' type='")
+					out.WriteString(mimetype)
+					out.WriteString("'>Browser does not support audio link: ")
+					out.WriteString("<a href='")
+					out.WriteString(url)
+					out.WriteString("'>" + name + "</a>")
+					out.WriteString("</audio>")
+				case "mp4": // NOTE: note "mov" - html5 does not support quicktime - let that fall through to simple link in the default case
+					out.WriteString("<video controls>")
+					out.WriteString("<source src='")
+					out.WriteString(url)
+					out.WriteString("' type='")
+					out.WriteString(mimetype)
+					out.WriteString("'>Browser does not support video link: ")
+					out.WriteString("<a href='")
+					out.WriteString(url)
+					out.WriteString("'>" + name + "</a>")
+					out.WriteString("</video>")
 				default:
-					log.Println("DONT KNOW WHAT TO DO files: " + ele.String())
+					out.WriteString("<a href='")
+					out.WriteString(url)
+					out.WriteString("'>" + name + "</a>")
 				}
 			}
 		}
@@ -309,6 +355,47 @@ func processChannelMessage(out *os.File, msg *gabs.Container) (err error) {
 	out.WriteString("</div>\n")
 	out.WriteString("</div>\n")
 
+	return
+}
+
+func archiveFile(id string, filetype string, url string) (archivedUrl string, err error) {
+	archivedUrl = "_files/" + id + "." + filetype
+	archivePath := path.Join(path.Join(outDir, "_files"), id+"."+filetype)
+	_, err = os.Stat(archivePath)
+	if err == nil {
+		// no need to re-download
+		return
+	}
+	if err = os.MkdirAll(path.Join(outDir, "_files"), 0777); err != nil {
+		return
+	}
+	var req *http.Request
+	var resp *http.Response
+	log.Printf("get %s  --> %s ...\n", url, archivePath)
+	if req, err = http.NewRequest("GET", url, nil); err != nil {
+		return
+	}
+	client := &http.Client{}
+
+	if resp, err = client.Do(req); err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		err = errors.New("GET " + url + " status: " + resp.Status)
+		return
+	}
+	var payload []byte
+	payload, err = io.ReadAll(resp.Body)
+
+	var f *os.File
+	if f, err = os.Create(archivePath); err != nil {
+		return
+	}
+	if _, err = f.Write(payload); err != nil {
+		return
+	}
 	return
 }
 
